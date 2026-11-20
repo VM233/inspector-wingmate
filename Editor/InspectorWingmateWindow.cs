@@ -10,6 +10,7 @@ namespace VM233.InspectorWingmate
     public sealed class InspectorWingmateWindow : EditorWindow
     {
         const string DragKey = "com.vm233.inspector-wingmate.components";
+        static readonly GUIContent windowTitle = new("Inspector Wingmate");
         static readonly ComponentClipboard clipboard = new(), drag = new();
         static readonly DragAndDrop.HierarchyDropHandlerV2 drop = Drop;
         readonly List<Component> components = new(), scratch = new();
@@ -50,7 +51,7 @@ namespace VM233.InspectorWingmate
         public static InspectorWingmateWindow Open()
         {
             var window = GetWindow<InspectorWingmateWindow>();
-            window.titleContent = new GUIContent("Inspector Wingmate");
+            if (window.titleContent.text != windowTitle.text) window.titleContent = windowTitle;
             return window;
         }
 
@@ -169,16 +170,18 @@ namespace VM233.InspectorWingmate
 
         internal void Choose(int index, bool toggle, bool range)
         {
-            if (!toggle && !range && !Searching && selection.Only(index)) return;
+            bool clearSearch = Searching;
+            if (!toggle && !range && !clearSearch && selection.Only(index)) return;
             selection.Select(index, toggle, range);
-            search.SetValueWithoutNotify(string.Empty);
+            if (clearSearch) search.SetValueWithoutNotify(string.Empty);
             InvalidateSelection();
         }
         void ShowAll()
         {
-            if (selection.All && !Searching) return;
+            bool clearSearch = Searching;
+            if (selection.All && !clearSearch) return;
             selection.Reset(components.Count);
-            search.SetValueWithoutNotify(string.Empty);
+            if (clearSearch) search.SetValueWithoutNotify(string.Empty);
             InvalidateSelection();
         }
         void Copy()
@@ -211,19 +214,32 @@ namespace VM233.InspectorWingmate
             if (target && ((flags & HierarchyDropFlags.DropUpon) == 0 || EditorUtility.IsPersistent(target)))
                 return DragAndDropVisualMode.Rejected;
             if (!perform) return DragAndDropVisualMode.Copy;
-            bool created = !target;
-            if (created)
-            {
-                target = new GameObject("Components");
-                StageUtility.PlaceGameObjectInCurrentStage(target);
-                if (forcedParent) target.transform.SetParent(forcedParent, false);
-                Undo.RegisterCreatedObjectUndo(target, "Create component target");
-            }
-            try { drag.Paste(target); }
-            catch { if (created && target) Undo.DestroyObjectImmediate(target); throw; }
+            if (target) drag.Paste(target);
+            else target = PasteIntoNewObject(drag, forcedParent);
             DragAndDrop.AcceptDrag();
             Selection.activeGameObject = target;
             return DragAndDropVisualMode.Copy;
+        }
+
+        internal static GameObject PasteIntoNewObject(ComponentClipboard source, Transform parent)
+        {
+            Undo.IncrementCurrentGroup();
+            int group = Undo.GetCurrentGroup();
+            var target = new GameObject("Components");
+            try
+            {
+                Undo.RegisterCreatedObjectUndo(target, "Create component target");
+                StageUtility.PlaceGameObjectInCurrentStage(target);
+                if (parent) target.transform.SetParent(parent, false);
+                source.Paste(target);
+                Undo.CollapseUndoOperations(group);
+                return target;
+            }
+            catch
+            {
+                Undo.RevertAllDownToGroup(group);
+                throw;
+            }
         }
     }
 }

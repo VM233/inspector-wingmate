@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.UIElements;
 using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace VM233.InspectorWingmate.Tests
 {
@@ -63,6 +65,83 @@ namespace VM233.InspectorWingmate.Tests
         }
 
         [Test]
+        public void RepeatedClipboardCaptureReusesTheNativePresetAndStoresTheLatestValue()
+        {
+            var target = new GameObject("Clipboard allocation target");
+            try
+            {
+                var source = target.AddComponent<BoxCollider>();
+                var components = new List<Component>();
+                target.GetComponents(components);
+                var selection = new ComponentSelection();
+                selection.Reset(components.Count);
+                selection.Select(1, false, false);
+                using var clipboard = new ComponentClipboard();
+                clipboard.Capture(components, selection);
+                clipboard.Capture(components, selection);
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 128; i++)
+                {
+                    source.center = new Vector3(i, 1, 2);
+                    clipboard.Capture(components, selection);
+                }
+                long bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+                source.center = Vector3.zero;
+                clipboard.Paste(target);
+                Assert.That(source.center, Is.EqualTo(new Vector3(127, 1, 2)));
+                Assert.That(bytes, Is.Zero);
+            }
+            finally { UnityEngine.Object.DestroyImmediate(target); }
+        }
+
+        [Test]
+        public void ChangingIsolationAndSearchingDisplayTheSelectedComponentsAndFields()
+        {
+            var previous = Selection.activeObject;
+            var target = new GameObject("Inspection changes");
+            var window = ScriptableObject.CreateInstance<InspectorWingmateWindow>();
+            try
+            {
+                target.AddComponent<BoxCollider>();
+                Selection.activeGameObject = target;
+                window.CreateGUI();
+                var query = window.rootVisualElement.Q<ToolbarSearchField>();
+                var views = window.rootVisualElement.Q<ScrollView>().contentContainer;
+                window.Choose(0, false, false);
+                window.Choose(1, false, false);
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 256; i++)
+                {
+                    window.Choose(0, false, false);
+                    window.Choose(1, false, false);
+                }
+                long isolationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+                Assert.That(views[0].style.display.value, Is.EqualTo(DisplayStyle.None));
+                Assert.That(views[1].style.display.value, Is.EqualTo(DisplayStyle.Flex));
+                query.SetValueWithoutNotify("Center");
+                window.InvalidateSelection();
+                bool foundCenter = false;
+                views[1].Query<PropertyField>().ForEach(field =>
+                {
+                    if (field.bindingPath == "m_Center" && field.style.display.value == DisplayStyle.Flex)
+                        foundCenter = true;
+                });
+                Assert.That(foundCenter, Is.True);
+                query.SetValueWithoutNotify("NoSuchWingmateField");
+                window.InvalidateSelection();
+                Assert.That(views[1].style.display.value, Is.EqualTo(DisplayStyle.None));
+                TestContext.WriteLine($"512 component changes, including UI Toolkit style changes: {isolationBytes} managed bytes.");
+                Assert.That(isolationBytes, Is.Zero);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(window);
+                Selection.activeObject = previous;
+                UnityEngine.Object.DestroyImmediate(target);
+            }
+        }
+
+        [Test]
         public void ClipboardFreezesValuesAndPastesMultipleComponentsWithUndo()
         {
             var source = new GameObject("Source");
@@ -89,6 +168,11 @@ namespace VM233.InspectorWingmate.Tests
                 Assert.That(pasted[1].center, Is.EqualTo(Vector3.right));
                 Undo.PerformUndo();
                 Assert.That(target.GetComponent<BoxCollider>(), Is.Null);
+                var created = InspectorWingmateWindow.PasteIntoNewObject(clipboard, target.transform);
+                Assert.That(created.transform.parent, Is.EqualTo(target.transform));
+                Assert.That(created.GetComponents<BoxCollider>().Length, Is.EqualTo(2));
+                Undo.PerformUndo();
+                Assert.That(created == null, Is.True);
             }
             finally
             {

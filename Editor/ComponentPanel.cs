@@ -27,7 +27,7 @@ namespace VM233.InspectorWingmate
         SerializedObject serialized;
         Component bound;
         int fieldCount;
-        bool indexed, dragCandidate;
+        bool indexed, dragCandidate, selectionStyled, wasSelected;
         Vector2 pointerDown;
 
         internal ComponentPanel(InspectorWingmateWindow window, int index)
@@ -91,9 +91,13 @@ namespace VM233.InspectorWingmate
         internal bool Show(bool visible, bool selected, string search)
         {
             Display(Chip, serialized != null);
-            Chip.EnableInClassList("unity-button--checked", selected);
-            // Tint also works in editor skins that do not style the checked button class.
-            Chip.style.unityFontStyleAndWeight = selected ? FontStyle.Bold : FontStyle.Normal;
+            if (!selectionStyled || wasSelected != selected)
+            {
+                Chip.EnableInClassList("unity-button--checked", selected);
+                Chip.style.unityFontStyleAndWeight = selected ? FontStyle.Bold : FontStyle.Normal;
+                wasSelected = selected;
+                selectionStyled = true;
+            }
             bool filtering = !string.IsNullOrEmpty(search);
             bool show = serialized != null && visible;
             if (show && filtering)
@@ -130,7 +134,8 @@ namespace VM233.InspectorWingmate
                     property.propertyType != SerializedPropertyType.String;
                 if (children && property.propertyType == SerializedPropertyType.ManagedReference)
                     children = property.managedReferenceId >= 0 && references.Add(property.managedReferenceId);
-                if (property.propertyPath == "m_Script") continue;
+                string path = property.propertyPath;
+                if (path == "m_Script") continue;
                 if (fieldCount == fields.Count)
                 {
                     var created = new Field();
@@ -138,7 +143,7 @@ namespace VM233.InspectorWingmate
                     results.Add(created.Input);
                 }
                 var field = fields[fieldCount++];
-                field.Path = property.propertyPath;
+                field.Path = path;
                 field.Label = property.displayName;
                 field.Depth = property.depth;
                 field.Input.bindingPath = field.Path;

@@ -1,6 +1,6 @@
 {
   "name": "com.vm233.inspector-wingmate",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "displayName": "Inspector Wingmate",
   "description": "A component inspector with isolation, field search and a shared component clipboard.",
   "unity": "6000.6",
