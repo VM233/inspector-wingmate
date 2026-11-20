@@ -1,0 +1,12 @@
+{
+  "name": "VM233.InspectorWingmate.Editor.Tests",
+  "references": [
+    "VM233.InspectorWingmate.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "VM233.InspectorWingmate.Editor",
+  "rootNamespace": "VM233.InspectorWingmate",
+  "includePlatforms": [
+    "Editor"
+  ]
+}

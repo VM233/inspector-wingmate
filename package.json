@@ -1,0 +1,20 @@
+{
+  "name": "com.vm233.inspector-wingmate",
+  "version": "1.0.0",
+  "displayName": "Inspector Wingmate",
+  "description": "A component inspector with isolation, field search and a shared component clipboard.",
+  "unity": "6000.6",
+  "license": "MIT",
+  "author": {
+    "name": "VM233"
+  },
+  "keywords": [
+    "editor",
+    "inspector",
+    "components"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VM233/inspector-wingmate.git"
+  }
+}
