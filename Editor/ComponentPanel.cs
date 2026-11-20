@@ -23,6 +23,7 @@ namespace VM233.InspectorWingmate
         readonly List<Field> fields = new();
         readonly HashSet<long> references = new();
         readonly InspectorWingmateWindow window;
+        readonly Action<DropdownMenuAction> runMenu;
         readonly int index;
         SerializedObject serialized;
         Component bound;
@@ -34,7 +35,9 @@ namespace VM233.InspectorWingmate
         {
             this.window = window;
             this.index = index;
+            runMenu = RunMenu;
             Chip.clicked += Activate;
+            Chip.AddManipulator(new ContextualMenuManipulator(PopulateMenu));
             Chip.RegisterCallback<PointerDownEvent>(PointerDown, TrickleDown.TrickleDown);
             Chip.RegisterCallback<PointerMoveEvent>(PointerMove, TrickleDown.TrickleDown);
             Chip.RegisterCallback<PointerUpEvent>(PointerUp, TrickleDown.TrickleDown);
@@ -77,6 +80,35 @@ namespace VM233.InspectorWingmate
             toggle = range = false;
         }
 
+        void PopulateMenu(ContextualMenuPopulateEvent evt)
+        {
+            evt.menu.AppendAction("Isolate", runMenu);
+            evt.menu.AppendAction("Toggle selection", runMenu);
+            evt.menu.AppendAction("Show all", runMenu);
+            evt.menu.AppendSeparator();
+            evt.menu.AppendAction("Copy components", runMenu);
+            evt.menu.AppendAction("Paste to this object", runMenu, window.CanPaste
+                ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+        }
+
+        void RunMenu(DropdownMenuAction item)
+        {
+            switch (item.name)
+            {
+                case "Isolate": window.Choose(index, false, false); break;
+                case "Toggle selection": window.Choose(index, true, false); break;
+                case "Show all": window.ShowAll(); break;
+                case "Copy components": window.CopyFrom(index); break;
+                case "Paste to this object": window.Paste(); break;
+            }
+        }
+
+        internal void SetCompact(bool compact)
+        {
+            StyleLength padding = compact ? new StyleLength(2) : new StyleLength(StyleKeyword.Null);
+            Chip.style.paddingLeft = Chip.style.paddingRight = padding;
+        }
+
         internal void Bind(Component component)
         {
             if (ReferenceEquals(bound, component)) return;
@@ -86,6 +118,11 @@ namespace VM233.InspectorWingmate
             bound = component;
             Chip.text = Body.text = ObjectNames.GetInspectorTitle(component);
             inspector.Bind(serialized);
+        }
+
+        internal void RefreshBinding()
+        {
+            if (serialized != null && bound && serialized.UpdateIfRequiredOrScript()) indexed = false;
         }
 
         internal bool Show(bool visible, bool selected, string search)
@@ -109,7 +146,7 @@ namespace VM233.InspectorWingmate
                 {
                     Field field = fields[i];
                     if (field.Depth <= parentDepth) parentDepth = -1;
-                    bool matches = parentDepth < 0 && ComponentSelection.Matches(field.Label, field.Path, search);
+                    bool matches = parentDepth < 0 && ComponentSelection.Matches(field.Label, field.Path, search, window.FuzzySearch);
                     Display(field.Input, matches);
                     if (matches) { parentDepth = field.Depth; show = true; }
                 }

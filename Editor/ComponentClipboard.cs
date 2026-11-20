@@ -22,6 +22,10 @@ namespace VM233.InspectorWingmate
         readonly List<Entry> entries = new();
         readonly List<Component> destination = new();
         readonly Dictionary<Type, int> ordinals = new();
+        // Presets can only adopt values of a compatible type. Retain a small number of
+        // native buffers for alternating clipboard types, up to the next scene close.
+        const int SpareCapacity = 16;
+        readonly List<(Type type, Preset preset)> spares = new(SpareCapacity);
         internal int Count { get; private set; }
 
         internal void Capture(List<Component> components, ComponentSelection selection)
@@ -37,8 +41,10 @@ namespace VM233.InspectorWingmate
                 var entry = entries[Count];
                 if (entry.Type != type)
                 {
-                    Release(entry);
+                    var reusable = TakeSpare(type);
+                    Recycle(entry);
                     entry.Type = type;
+                    entry.Data = reusable;
                 }
                 if (component is Transform transform && !(component is RectTransform))
                 {
@@ -54,14 +60,13 @@ namespace VM233.InspectorWingmate
                 else
                 {
                     entry.Data = new Preset(component) { hideFlags = HideFlags.HideAndDontSave };
-                    if (!entry.Data.IsValid()) { Release(entry); continue; }
+                    if (!entry.Data.IsValid()) { Destroy(entry); continue; }
                 }
                 ordinals.TryGetValue(type, out entry.Ordinal);
                 ordinals[type] = entry.Ordinal + 1;
                 Count++;
             }
-            // Empty clipboard slots must not keep references to a previously copied scene.
-            for (int i = Count; i < entries.Count; i++) Release(entries[i]);
+            for (int i = Count; i < entries.Count; i++) Recycle(entries[i]);
         }
 
         internal void Paste(GameObject target)
@@ -103,7 +108,41 @@ namespace VM233.InspectorWingmate
             finally { destination.Clear(); }
         }
 
-        static void Release(Entry entry)
+        Preset TakeSpare(Type type)
+        {
+            for (int i = spares.Count - 1; i >= 0; i--)
+            {
+                if (spares[i].type != type) continue;
+                var preset = spares[i].preset;
+                spares.RemoveAt(i);
+                return preset;
+            }
+            return null;
+        }
+
+        void Recycle(Entry entry)
+        {
+            if (entry.Data)
+            {
+                if (spares.Count == SpareCapacity)
+                {
+                    UnityEngine.Object.DestroyImmediate(spares[0].preset);
+                    spares.RemoveAt(0);
+                }
+                spares.Add((entry.Type, entry.Data));
+            }
+            entry.Data = null;
+            entry.Type = null;
+        }
+
+        internal void ReleaseSparePresets()
+        {
+            foreach (var item in spares)
+                if (item.preset) UnityEngine.Object.DestroyImmediate(item.preset);
+            spares.Clear();
+        }
+
+        static void Destroy(Entry entry)
         {
             if (entry.Data) UnityEngine.Object.DestroyImmediate(entry.Data);
             entry.Data = null;
@@ -112,7 +151,8 @@ namespace VM233.InspectorWingmate
 
         public void Dispose()
         {
-            foreach (var entry in entries) Release(entry);
+            foreach (var entry in entries) Destroy(entry);
+            ReleaseSparePresets();
             entries.Clear();
             ordinals.Clear();
             Count = 0;

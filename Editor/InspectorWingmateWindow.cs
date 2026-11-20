@@ -14,11 +14,14 @@ namespace VM233.InspectorWingmate
         static readonly ComponentClipboard clipboard = new(), drag = new();
         static readonly DragAndDrop.HierarchyDropHandlerV2 drop = Drop;
         readonly List<Component> components = new(), scratch = new();
-        readonly List<ComponentPanel> panels = new();
+        readonly ComponentViewCache panels = new();
         readonly ComponentSelection selection = new();
         [SerializeField] GameObject pinned;
         [SerializeField] bool locked;
+        [SerializeField] ObjectViewHistory history = new();
+        [SerializeField] bool rememberViews = true, fuzzySearch = true, compactChips;
         GameObject shown;
+        Component requestedComponent;
         ToolbarSearchField search;
         VisualElement chips;
         ScrollView details;
@@ -27,11 +30,14 @@ namespace VM233.InspectorWingmate
         ToolbarButton copy, paste;
         bool presentationDirty = true;
         static event System.Action ClipboardChanged;
+        static event System.Action<UnityEngine.SceneManagement.Scene> SceneReleased;
 
         [InitializeOnLoadMethod]
         static void Register()
         {
             DragAndDrop.AddDropHandlerV2(drop);
+            EditorSceneManager.sceneClosed += SceneClosed;
+            UnityEngine.SceneManagement.SceneManager.sceneUnloaded += SceneClosed;
             AssemblyReloadEvents.beforeAssemblyReload += Unregister;
             EditorApplication.quitting += Unregister;
         }
@@ -39,14 +45,38 @@ namespace VM233.InspectorWingmate
         static void Unregister()
         {
             DragAndDrop.RemoveDropHandlerV2(drop);
+            EditorSceneManager.sceneClosed -= SceneClosed;
+            UnityEngine.SceneManagement.SceneManager.sceneUnloaded -= SceneClosed;
             AssemblyReloadEvents.beforeAssemblyReload -= Unregister;
             EditorApplication.quitting -= Unregister;
             clipboard.Dispose();
             drag.Dispose();
         }
 
+        static void SceneClosed(UnityEngine.SceneManagement.Scene scene)
+        {
+            clipboard.ReleaseSparePresets();
+            drag.ReleaseSparePresets();
+            SceneReleased?.Invoke(scene);
+        }
+
         [MenuItem("Window/General/Inspector Wingmate")]
         static void OpenFromMenu() => Open();
+
+        [MenuItem("CONTEXT/Component/Inspect in Wingmate")]
+        static void OpenFromComponent(MenuCommand command)
+        {
+            if (command.context is Component component) Open().Inspect(component);
+        }
+
+        internal void Inspect(Component component)
+        {
+            if (!component) return;
+            requestedComponent = component;
+            if (locked) pinned = component.gameObject;
+            Selection.activeGameObject = component.gameObject;
+            if (pin != null) Refresh();
+        }
 
         public static InspectorWingmateWindow Open()
         {
@@ -74,6 +104,11 @@ namespace VM233.InspectorWingmate
             search.style.flexGrow = 1;
             search.RegisterValueChangedCallback(SearchChanged);
             toolbar.Add(search);
+            var options = new ToolbarMenu { text = "Options" };
+            options.menu.AppendAction("Remember object views", ChangeOption, OptionStatus);
+            options.menu.AppendAction("Fuzzy field search", ChangeOption, OptionStatus);
+            options.menu.AppendAction("Compact component buttons", ChangeOption, OptionStatus);
+            toolbar.Add(options);
             rootVisualElement.Add(toolbar);
             chips = new VisualElement();
             chips.style.flexDirection = FlexDirection.Row;
@@ -88,6 +123,7 @@ namespace VM233.InspectorWingmate
             EditorApplication.hierarchyChanged += Refresh;
             Undo.undoRedoPerformed += OnUndo;
             ClipboardChanged += UpdateCommands;
+            SceneReleased += ReleaseScene;
             Refresh();
         }
 
@@ -95,14 +131,63 @@ namespace VM233.InspectorWingmate
 
         void Disconnect()
         {
+            SaveView();
             Selection.selectionChanged -= Refresh;
             EditorApplication.hierarchyChanged -= Refresh;
             Undo.undoRedoPerformed -= OnUndo;
             ClipboardChanged -= UpdateCommands;
-            foreach (var panel in panels) panel.Dispose();
+            SceneReleased -= ReleaseScene;
             panels.Clear();
             components.Clear();
             shown = null;
+            pin = null;
+        }
+
+        void SaveView()
+        {
+            if (rememberViews && shown && search != null) history.Save(shown, components, selection, search.value);
+        }
+
+        void ReleaseScene(UnityEngine.SceneManagement.Scene scene)
+        {
+            history.ReleaseScene(scene);
+            panels.ReleaseScene(scene);
+            if (shown && shown.scene != scene) return;
+            shown = null;
+            presentationDirty = true;
+        }
+
+        internal bool FuzzySearch => fuzzySearch;
+        internal bool CanPaste => shown && !EditorUtility.IsPersistent(shown) && clipboard.Count != 0;
+
+        DropdownMenuAction.Status OptionStatus(DropdownMenuAction option)
+        {
+            bool enabled = option.name switch
+            {
+                "Remember object views" => rememberViews,
+                "Fuzzy field search" => fuzzySearch,
+                _ => compactChips
+            };
+            return enabled ? DropdownMenuAction.Status.Checked : DropdownMenuAction.Status.Normal;
+        }
+
+        void ChangeOption(DropdownMenuAction option)
+        {
+            switch (option.name)
+            {
+                case "Remember object views":
+                    rememberViews = !rememberViews;
+                    if (!rememberViews) history.Clear();
+                    break;
+                case "Fuzzy field search":
+                    fuzzySearch = !fuzzySearch;
+                    InvalidateSelection();
+                    break;
+                case "Compact component buttons":
+                    compactChips = !compactChips;
+                    panels.SetCompact(compactChips);
+                    break;
+            }
         }
 
         void ChangeLock(ChangeEvent<bool> change)
@@ -120,7 +205,7 @@ namespace VM233.InspectorWingmate
             ShowSelection();
         }
 
-        void Refresh()
+        internal void Refresh()
         {
             if (locked && !pinned) locked = false;
             pin.SetValueWithoutNotify(locked);
@@ -134,21 +219,29 @@ namespace VM233.InspectorWingmate
             if (changed)
             {
                 presentationDirty = true;
+                SaveView();
                 shown = target;
                 components.Clear();
                 components.AddRange(scratch);
-                selection.Reset(components.Count);
-                while (panels.Count < components.Count)
+                if (rememberViews)
                 {
-                    var panel = new ComponentPanel(this, panels.Count);
-                    panels.Add(panel);
-                    chips.Add(panel.Chip);
-                    details.Add(panel.Body);
+                    string saved = history.Restore(target, components, selection);
+                    if (search.value != saved) search.SetValueWithoutNotify(saved);
                 }
-                for (int i = 0; i < panels.Count; i++)
-                    panels[i].Bind(i < components.Count ? components[i] : null);
+                else
+                {
+                    selection.Reset(components.Count);
+                    if (Searching) search.SetValueWithoutNotify(string.Empty);
+                }
+                panels.Activate(target, this, components, chips, details.contentContainer, compactChips);
             }
             scratch.Clear();
+            if (requestedComponent && requestedComponent.gameObject == shown)
+            {
+                int position = components.IndexOf(requestedComponent);
+                requestedComponent = null;
+                if (position >= 0) Choose(position, false, false);
+            }
             ShowSelection();
             UpdateCommands();
         }
@@ -176,7 +269,7 @@ namespace VM233.InspectorWingmate
             if (clearSearch) search.SetValueWithoutNotify(string.Empty);
             InvalidateSelection();
         }
-        void ShowAll()
+        internal void ShowAll()
         {
             bool clearSearch = Searching;
             if (selection.All && !clearSearch) return;
@@ -189,11 +282,16 @@ namespace VM233.InspectorWingmate
             clipboard.Capture(components, selection);
             ClipboardChanged?.Invoke();
         }
-        void Paste() { clipboard.Paste(shown); Refresh(); }
+        internal void CopyFrom(int index)
+        {
+            if (!selection.IsSelected(index)) Choose(index, false, false);
+            Copy();
+        }
+        internal void Paste() { clipboard.Paste(shown); Refresh(); }
         void UpdateCommands()
         {
             copy.SetEnabled(shown);
-            paste.SetEnabled(shown && !EditorUtility.IsPersistent(shown) && clipboard.Count != 0);
+            paste.SetEnabled(CanPaste);
             pin.SetEnabled(shown);
         }
 
